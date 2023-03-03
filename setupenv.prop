@@ -1,0 +1,6 @@
+### Database Variables
+dbusername:db_admin
+dbpassword:Password@123
+dbhost:qdb.database.cmp.com
+dbport:1521
+dbservice:rad
