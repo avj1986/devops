@@ -1,0 +1,218 @@
+import csv
+import os
+
+try:
+    import cx_Oracle
+    import socket
+except ImportError as e:
+    raise Exception("Failed to import module", e)
+
+fileAbsPath = os.path.abspath(__file__)
+dirAbsPath = os.path.dirname(fileAbsPath)
+dbconfigfile = dirAbsPath + "/../Setup/Variables/setupenv.prop"
+oracleTestdataDir = dirAbsPath + "/../TestData/Oracle/"
+
+asset_csv = oracleTestdataDir + "asset.csv"
+asset_host_csv = oracleTestdataDir + "asset_host.csv"
+
+
+class DatabaseHandler:
+    @staticmethod
+    def _read_config(configfile):
+        try:
+            cfgfile = open(configfile)
+            cfgline = cfgfile.readline()
+            cfgdict = {}
+            while cfgline != '':
+                if cfgline.startswith('#'):
+                    cfgline = cfgfile.readline()
+                    continue
+                else:
+                    key, value = cfgline.split(':')
+                    cfgdict[key.strip()] = value.strip()
+                    cfgline = cfgfile.readline()
+            cfgfile.close()
+        except Exception as e:
+            raise Exception("Failed to import module", e)
+        print("Config File read successfully...")
+        return cfgdict
+
+    def create_db_connection(self):
+        """
+        This method connects to Oracle database
+        :param username: Oracle DB Username
+        :param password: Oracle DB Username's password
+        :param host: Oracle DB hostname
+        :param port: Oracle listner port
+        :param service: Oracle listner service
+        :return: Oracle Connection object
+        """
+        try:
+            db_params = self._read_config(dbconfigfile)
+            conn_str = db_params["dbusername"] + "/" + db_params["dbpassword"] + "@" + db_params["dbhost"] + ":" + str(
+                db_params["dbport"]) + "/" + db_params["dbservice"]
+            print(conn_str)
+            conn = cx_Oracle.connect(conn_str)
+            print("Database connection established Successfully!")
+        except cx_Oracle.DatabaseError as exc:
+            raise Exception("Unable to connect to database", str(exc))
+        return conn
+
+    def execute_sql_script(self, conn_obj, sqlfile):
+        """
+        Execute SQL DML Queries
+        :param sqlfile:
+        :param conn_obj: Oracle connection object
+        :param query: SQL DML query e.g. delete, update and insert
+        :return: None
+        """
+        c = conn_obj.cursor()
+        try:
+            for query in open(sqlfile):
+                print("Now executing " + query)
+                c.execute(query)
+                conn_obj.commit()
+            print("Done SQL execution")
+            return True
+        except cx_Oracle.Error as exc:
+            raise Exception(f"Exception occured while executing DML query: \n {query}", exc)
+            return False
+
+    def execute_select_query(self, conn_obj, query):
+        """
+        Execute SQL Read Query
+        :param conn_obj: Oracle connection object
+        :param query: SQL read query e.g. select
+        :return: Output of select query in List datatype
+        """
+        c = conn_obj.cursor()
+        selectQueryResult = []
+        try:
+            conn = c.execute(query)
+        except cx_Oracle.Error as exc:
+            raise Exception("Exception occured while selecting the data from database", exc)
+        for row in conn:
+            selectQueryResult.append(row)
+        return selectQueryResult
+
+    def execute_select_count_query(self, conn_obj, **kwargs):
+        """
+        Execute SQL Read Query
+        :param conn_obj: Oracle connection object
+        :param tablename: Name of the table
+        :return: Output of select query in List datatype
+        """
+        c = conn_obj.cursor()
+        try:
+            key, value = kwargs.items()
+            if kwargs.get('wherecriteria') is not None:
+                conn = c.execute(f"select count(*) from {kwargs.get('tablename')} where {kwargs.get('wherecriteria')}")
+            else:
+                conn = c.execute(f"select count(*) from {kwargs.get('tablename')}")
+
+        except cx_Oracle.Error as exc:
+            raise Exception("Exception occured while selecting the data from database", exc)
+
+        return conn.fetchone()[0]
+
+    def close_db_connection(self, conn_obj):
+        """
+        Closes connection to Oracle DB
+        :param conn_obj: Oracle connection object
+        :return: None
+        """
+        conn_obj.close()
+        print("Database connection Closed Successfully!")
+
+
+class PrerequisiteDataHandler:
+    @staticmethod
+    def iptohex(ip):
+        return socket.inet_aton(ip).hex()
+
+    def __dumpInsertQuerySQL(self, outputdir, table, rows):
+        """
+        Generate SQL query file
+        :param outputdir: Directory location at which query file will be generated
+        :param table: Table name which is to be used in DML query
+        :param rows: Parsed data from CSV
+        :return: SQL Script File path
+        """
+        outfile = open(outputdir + "/" + table + "_INSERT.sql", 'w')
+        print(f"Now creating query file...")
+        for rownum in range(1, len(rows)):
+            outfile.write(f"insert into {table} ({','.join(rows[0])}) values ({','.join(rows[rownum])})" + "\n")
+        outfile.close()
+        print(f"Insert query SQL file for {table} generated at : {outfile.name}")
+        print("*" * 100)
+        return outfile.name
+
+    def __dumpDeleteQuerySQL(self, outputdir, table, rows):
+        """
+        Generate SQL query file
+        :param outputdir: Directory location at which query file will be generated
+        :param table: Table name which is to be used in DML query
+        :param rows: Parsed data from CSV
+        :return: SQL Script File path
+        """
+        outfile = open(outputdir + "/" + table + "_DELETE.sql", 'w')
+        print(f"Now creating query file...")
+        for rownum in range(1, len(rows)):
+            outfile.write(f"delete from {table} where {rows[0][0]} in ({rows[rownum][0]})" + "\n")
+        outfile.close()
+        print(f"Delete query SQL file for {table} generated Successfully : {outfile.name}")
+        print("*" * 100)
+        return outfile.name
+
+    def generate_sql(self, table, dmlOperation, filename):
+        """
+        Generate SQL query file
+        :param table: Table name which is to be used in DML query
+        :param dmlOperation: SQL DML operation to be dumped in query file
+        :param filename: Input file name which will be parsed and used in resultant query file
+        :return: SQL Script File path
+        """
+        outputdir = os.path.dirname(filename)
+        with open(filename, 'r') as data:
+            content = list(csv.reader(data))
+        print(f"Data file for {table} read")
+        if dmlOperation == "INSERT":
+            return self.__dumpInsertQuerySQL(outputdir, table, content)
+        elif dmlOperation == "DELETE":
+            return self.__dumpDeleteQuerySQL(outputdir, table, content)
+
+
+class DataPopulator:
+    conn_obj = prerequisitedatahandler = databasehandler = ''
+    SQL_insert_asset = SQL_insert_asset_host = ''
+    SQL_delete_asset = SQL_delete_asset_host = ''
+
+    def __prepareHandlers(self):
+        self.prerequisitedatahandler = PrerequisiteDataHandler()
+        self.databasehandler = DatabaseHandler()
+        self.conn_obj = self.databasehandler.create_db_connection()
+
+    def createSQLScripts(self):
+        self.__prepareHandlers()
+        # SQL File creation
+        self.SQL_insert_asset = self.prerequisitedatahandler.generate_sql("GRC.ASSET", "INSERT", asset_csv)
+        self.SQL_delete_asset = self.prerequisitedatahandler.generate_sql("GRC.ASSET", "DELETE", asset_csv)
+        self.SQL_insert_asset_host = self.prerequisitedatahandler.generate_sql("GRC.ASSET_HOST", "INSERT",
+                                                                               asset_host_csv)
+        self.SQL_delete_asset_host = self.prerequisitedatahandler.generate_sql("GRC.ASSET_HOST", "DELETE",
+                                                                               asset_host_csv)
+
+    def insertData(self):
+        # Insertion in database
+        self.databasehandler.execute_sql_script(self.conn_obj, self.SQL_insert_asset)
+
+    def deleteData(self):
+        # Deletion from database
+        self.databasehandler.execute_sql_script(self.conn_obj, self.SQL_delete_asset)
+        self.databasehandler.close_db_connection(self.conn_obj)
+
+
+datapopulator = DataPopulator()
+datapopulator.createSQLScripts()
+datapopulator.insertData()
+datapopulator.deleteData()
